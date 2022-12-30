@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 import csv
 import copy
+import pynput
 import argparse
 import itertools
+import time
+import pyautogui
 from collections import Counter
 from collections import deque
 
@@ -15,23 +18,22 @@ from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
 
-from pynput.mouse import Button, Controller
 
-import screeninfo
 
-mouse = Controller()
+wCam, hCam = 640, 480
+frameR = 100     #Frame Reduction
+smoothening = 12 #random value
+keypoint_classifier_labels = ['Open', 'Close', 'Pointer', 'OK', 'Click','ScrollDown','ScrollUp']
+point_history_classifier_labels = ['Stop', 'Clockwise', 'Counterclockwise', 'Move']
 
-smoothening = 12
-plocX, plocY = 0, 0
-clocX, clocY = 0, 0
 
 def get_args():
         
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--width", help='cap width', type=int, default=1920)
-    parser.add_argument("--height", help='cap height', type=int, default=1080)
+    #parser.add_argument("--width", help='cap width', type=int, default=1920)
+    #parser.add_argument("--height", help='cap height', type=int, default=1080)
 
     parser.add_argument('--use_static_image_mode', action='store_true')
     parser.add_argument("--min_detection_confidence",
@@ -52,37 +54,22 @@ def main():
     # Argument parsing #################################################################
     args = get_args()
 
-    #monitor height and width
-    screen = screeninfo.get_monitors()[0]
-    width, height = screen.width, screen.height
+    # cap_device = args.device
+    # cap_width = args.width
+    # cap_height = args.height
     
-    cap_device = args.device
-    cap_width = args.width
-    cap_height = args.height
-    
-    #height*width set by user
-    print(cap_height, cap_width)
-    print(cv.CAP_PROP_FRAME_WIDTH, cv.CAP_PROP_FRAME_HEIGHT)
+    # #height*width set by user
+    # print(cap_height, cap_width)
+    # print(cv.CAP_PROP_FRAME_WIDTH, cv.CAP_PROP_FRAME_HEIGHT)
 
     use_static_image_mode = args.use_static_image_mode
     min_detection_confidence = args.min_detection_confidence
     min_tracking_confidence = args.min_tracking_confidence
 
-    use_brect = True
 
-    # Camera preparation ###############################################################
-    cap = cv.VideoCapture(cap_device)    
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
-    
-    m_cap_height = cap.get(cv.CAP_PROP_FRAME_HEIGHT)
-    m_cap_width = cap.get(cv.CAP_PROP_FRAME_WIDTH)
-    
-    #ratio of videocapture window and the monitor window
-    h_ratio, w_ratio = height/m_cap_height, width/m_cap_width
-    
-    print(h_ratio, w_ratio)
-    print(m_cap_height, m_cap_width)
+    cap = cv.VideoCapture(0)
+    cap.set(3, wCam)
+    cap.set(4, hCam)
     # Model load #############################################################
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
@@ -123,6 +110,17 @@ def main():
 
     #  ########################################################################
     mode = 0
+    pTime = 0
+    plocX, plocY = 0, 0
+    clocX, clocY = 0, 0
+
+    wScr, hScr = pyautogui.size()
+    print(f"Screen width {wScr} Screen height {hScr}")
+
+    clicked = False
+    dragging = False
+    use_brect = True
+
 
     while True:
         fps = cvFpsCalc.get()
@@ -159,7 +157,7 @@ def main():
                 brect = calc_bounding_rect(debug_image, hand_landmarks)
                 # Landmark calculation
                 landmark_list = calc_landmark_list(debug_image, hand_landmarks)
-                length, image, lineInfo = findDistance(landmark_list, 8, 12, image)
+                
                 
                 # Conversion to relative coordinates / normalized coordinates
                 pre_processed_landmark_list = pre_process_landmark(
@@ -172,17 +170,12 @@ def main():
 
                 # Hand sign classification
                 hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-                
-                    
-                if hand_sign_id == 2 and length < 35: 
-                    mouse.click(Button.left, count=1)
-                    # print(length)                  
-                    # print('Click Mouse')
-                    break
                 if hand_sign_id == 2:  # Point gesture
                     point_history.append(landmark_list[8])
                 else:
                     point_history.append([0, 0])
+
+                
                 
                 
                 # Finger gesture classification
@@ -196,6 +189,73 @@ def main():
                 finger_gesture_history.append(finger_gesture_id)
                 most_common_fg_id = Counter(
                     finger_gesture_history).most_common()
+                x1 = landmark_list[8][0]
+                y1 = landmark_list[8][1]
+                # x2 = landmark_list[12][0]
+                # y2 = landmark_list[12][1]   
+
+                x3 = np.interp(x1, (frameR, wCam-frameR), (0, wScr))
+                y3 = np.interp(y1, (frameR, hCam-frameR), (0, hScr))
+
+                # smooth values
+                clocX = plocX + (x3 - plocX) / smoothening
+                clocY = plocY + (y3 - plocY) / smoothening
+
+                if keypoint_classifier_labels[hand_sign_id] == 'Pointer': # mouse cursor
+
+                    # move mouse pointer
+                    pyautogui.moveTo(wScr - clocX, clocY, duration=0, _pause=False)
+                    cv.circle(debug_image, (x1, y1), 15, (255, 0, 255), cv.FILLED)
+                # else:
+
+                #     if keypoint_classifier_labels[hand_sign_id] == 'Close':  # close all fingers close for up and down
+                #         # press mouse button for dragging
+                #         if not dragging:
+                #             pyautogui.mouseDown()
+                #             #time.sleep(0.5)
+                #             dragging = True
+                #             print("start dragging")                            
+                #             cv.circle(debug_image, (x1, y1), 15, (0, 0, 255), cv.FILLED)
+                #         else:
+                #             pyautogui.FAILSAFE=False
+                #             pyautogui.moveTo(wScr - clocX, clocY, duration=0, _pause=False)
+                #             cv.circle(debug_image, (x1, y1), 15, (255, 0, 255), cv.FILLED)                            
+                #     else:
+                #         # release mouse button
+                #         if dragging:                        
+                #             pyautogui.mouseUp()
+                #             #time.sleep(0.5)
+                #             dragging = False
+                #             print("stop dragging")        
+
+                #single click
+                if keypoint_classifier_labels[hand_sign_id] == 'Click': # if all fingers open gesture for click purpose
+                    if not clicked:
+                        cv.circle(debug_image, (x1, y1), 15, (0, 255, 0), cv.FILLED)
+                        pyautogui.click(button='right')
+                        clicked = True
+                        print("clicking", x1, y1)
+                else:
+                    clicked = False
+
+                plocX, plocY = clocX, clocY
+
+                if hand_sign_id == 3:  # left click for Ok hand gesture
+                        pyautogui.FAILSAFE = False
+                        pyautogui.click(button='left')
+                        cv.circle(debug_image, (x1, y1), 15, (0, 255, 0), cv.FILLED)
+                elif hand_sign_id == 5:  # scroll down
+                        pyautogui.FAILSAFE = False
+                        pyautogui.scroll(-10,wScr - clocX, clocY)
+                        cv.circle(debug_image, (x1, y1), 15, (0, 255, 0), cv.FILLED)
+                elif hand_sign_id == 6:  # scroll Up
+                        pyautogui.FAILSAFE = False
+                        pyautogui.scroll(10,wScr - clocX, clocY)
+                        cv.circle(debug_image, (x1, y1), 15, (0, 255, 0), cv.FILLED)
+                    
+                else:
+                    point_history.append([0, 0])
+                
 
                 # Drawing part
                 debug_image = draw_bounding_rect(use_brect, debug_image, brect)
@@ -210,8 +270,8 @@ def main():
         else:
             point_history.append([0, 0])
         
-        debug_image = draw_point_history(debug_image, point_history, w_ratio, h_ratio)
-        debug_image = draw_info(debug_image, fps, mode, number)
+        debug_image = draw_point_history(debug_image, point_history)
+        debug_image = draw_info(debug_image, fps, mode,number )
         
 
         # Screen reflection #############################################################
@@ -559,24 +619,11 @@ def draw_info_text(image, brect, handedness, hand_sign_text,
     return image
 
 
-def draw_point_history(image, point_history, w_ratio, h_ratio):
-    global plocX, plocY, clocX, clocY
-    
-    # print(point_history)
+def draw_point_history(image, point_history):
     for index, point in enumerate(point_history):
-        # print(point)
         if point[0] != 0 and point[1] != 0:
-            # print(point_history[-1][0],point_history[-1][1])
-            # mouse.position = (h_ratio*point_history[-1][0],w_ratio*point_history[-1][1])
-            x1 = h_ratio*point_history[-1][0]
-            y1 = w_ratio*point_history[-1][1]
-            #smoothen values
-            clocX = plocX + (x1 - plocX) / smoothening
-            clocY = plocY + (y1 - plocY) / smoothening
-            mouse.position = (clocX, clocY)
             cv.circle(image, (point[0], point[1]), 1 + int(index / 2),
                       (152, 251, 152), 2)
-            plocX, plocY = clocX, clocY
             
     return image
 
@@ -598,21 +645,6 @@ def draw_info(image, fps, mode, number):
                        cv.LINE_AA)
     return image
 
-import math
-def findDistance(landmark_list, p1, p2, image, draw=True, r=15, t=3):
-        x1, y1 = landmark_list[p1]
-        x2, y2 = landmark_list[p2]
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-
-        if draw:
-            cv.line(image, (x1, y1), (x2, y2), (255, 0, 255), t)
-            cv.circle(image, (x1, y1), r, (255, 0, 255), cv.FILLED)
-            cv.circle(image, (x2, y2), r, (255, 0, 255), cv.FILLED)
-            cv.circle(image, (cx, cy), r, (0, 0, 255), cv.FILLED)
-        length = math.hypot(x2 - x1, y2 - y1)
-
-        return length, image, [x1, y1, x2, y2, cx, cy]
-
-
+    
 if __name__ == '__main__':
     main()
